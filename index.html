@@ -180,6 +180,14 @@ button{user-select:none;-webkit-user-select:none}
     <div class="net" id="net"></div>
     <section><h2>Chi theo danh mục</h2><div class="bars" id="bars"></div></section>
     <section><h2>Các khoản đã ghi</h2><div id="list"></div></section>
+    <section class="backup"><h2>Đồng bộ Google Sheets</h2>
+      <p id="syncInfo"></p>
+      <div id="syncForm" class="backup">
+        <label class="f">Địa chỉ Web App<input id="sUrl" inputmode="url" autocomplete="off" placeholder="https://script.google.com/macros/s/.../exec"></label>
+        <label class="f">Mã khóa<input id="sKey" autocomplete="off"></label>
+      </div>
+      <div class="acts"><button type="button" id="sGo" class="primary">Kết nối</button><button type="button" id="sOff" hidden>Ngắt kết nối</button></div>
+    </section>
     <section class="backup"><h2>Sao lưu</h2>
       <p id="bkInfo"></p>
       <div class="acts"><button type="button" id="bkOut" class="primary">Xuất file sao lưu</button><button type="button" id="bkIn">Nhập từ file</button></div>
@@ -234,9 +242,17 @@ function localStore(){
   const push = () => { try{ localStorage.setItem(KEY, JSON.stringify(all)) }catch(e){} cb && cb(all.filter(t=>t.ym===ym)) };
   return {
     watch(m, f){ ym = m; cb = f; f(all.filter(t=>t.ym===ym)) },
-    async add(t){ const id = "l"+Date.now()+Math.random().toString(36).slice(2,6); all.push({...t,id}); push(); return id },
-    async save(id, t){ all = all.map(x=>x.id===id?{...t,id}:x); push() },
-    async remove(id){ all = all.filter(x=>x.id!==id); push() },
+    async add(t){ const id = "l"+Date.now()+Math.random().toString(36).slice(2,6); const r = {...t,id,u:Date.now()}; all.push(r); push(); onWrite("upsert", r); return id },
+    async save(id, t){ const r = {...t,id,u:Date.now()}; all = all.map(x=>x.id===id?r:x); push(); onWrite("upsert", r) },
+    async remove(id){ const old = all.find(x=>x.id===id); all = all.filter(x=>x.id!==id); push(); if(old) onWrite("delete", {...old, u:Date.now()}) },
+    reconcile(srv, del, pending){
+      const m = new Map(all.map(t=>[t.id,t])); const seen = new Set();
+      for(const id of del){ seen.add(id); if(!pending.has(id)) m.delete(id) }
+      for(const s of srv){ seen.add(s.id); if(pending.has(s.id) || !/^\d{4}-\d{2}-\d{2}$/.test(s.d)) continue; const l = m.get(s.id);
+        if(!l || (s.u||0) > (l.u||0)) m.set(s.id, {...s, ym:s.d.slice(0,7)}) }
+      all = [...m.values()]; push();
+      return all.filter(t => !seen.has(t.id));
+    },
     all(){ return all.slice() },
     merge(list){ const m = new Map(all.map(t=>[t.id,t])); for(const t of list) m.set(t.id,t); all = [...m.values()]; push(); return all.length }
   };
@@ -245,6 +261,9 @@ async function boot(){
   store = localStore();
   try{ if(navigator.storage && navigator.storage.persist) navigator.storage.persist() }catch(e){}
   subscribe(); renderCats(); renderBackup();
+  syncNow();
+  window.addEventListener("online", syncNow);
+  document.addEventListener("visibilitychange", () => { if(document.visibilityState === "visible") syncNow() });
 }
 function subscribe(){
   store.watch(viewYm, list => { txs = list.slice().sort((a,b)=> a.d===b.d ? (b.ts||0)-(a.ts||0) : (a.d<b.d?1:-1)); renderAll() },
@@ -395,10 +414,9 @@ function renderBackup(){
   let last = 0; try{ last = +localStorage.getItem("sothuchi.backup") || 0 }catch(e){}
   const n = store ? store.all().length : 0;
   const days = last ? Math.floor((Date.now()-last)/864e5) : null;
-  $("bkInfo").textContent = "Sổ có " + n + " khoản, lưu trên chính điện thoại này. " +
+  $("bkInfo").textContent = "Sổ có " + n + " khoản trên máy này. " +
     (last ? (days===0 ? "Đã sao lưu hôm nay." : "Sao lưu gần nhất: " + days + " ngày trước.") : "Chưa sao lưu lần nào.");
-  const due = n >= 10 && (days===null || days >= 14);
-  setStatus(due ? "Đã lâu chưa sao lưu. Vào Tháng này, kéo xuống cuối để xuất file." : "", due);
+  renderSync();
 }
 $("bkOut").onclick = async () => {
   const name = "so-thu-chi-" + TODAY() + ".json";
@@ -421,6 +439,68 @@ $("bkFile").onchange = async e => {
     if(!ok.length) throw 0;
     store.merge(ok); renderBackup(); showToast("Đã nhập " + ok.length + " khoản từ file.", false);
   }catch(err){ showToast("File này không phải file sao lưu của Sổ Thu Chi.", false) }
+};
+
+/* ---------- Đồng bộ Google Sheets ---------- */
+const SYNC_KEY = "sothuchi.sync", OUT_KEY = "sothuchi.outbox";
+let sync = null, outbox = [], syncing = false, syncErr = "", offArmed = false;
+try{ sync = JSON.parse(localStorage.getItem(SYNC_KEY) || "null"); outbox = JSON.parse(localStorage.getItem(OUT_KEY) || "[]") }catch(e){}
+const saveOutbox = () => { try{ localStorage.setItem(OUT_KEY, JSON.stringify(outbox)) }catch(e){} };
+const withName = t => ({...t, catName:(CAT[t.cat]||CAT.khac).n});
+function onWrite(op, t){ if(!sync) return; outbox = outbox.filter(o => o.tx.id !== t.id); outbox.push({op, tx:withName(t)}); saveOutbox(); flush() }
+async function api(body){
+  const r = await fetch(sync.url, {method:"POST", headers:{"Content-Type":"text/plain;charset=utf-8"}, body:JSON.stringify({...body, key:sync.key})});
+  const j = await r.json(); if(j.error) throw new Error(j.error); return j;
+}
+const errText = e => e && e.message==="key" ? "Sai mã khóa đồng bộ. Kiểm tra lại ở mục Đồng bộ." : "Chưa đồng bộ được, app sẽ tự thử lại khi có mạng.";
+async function flush(){
+  if(!sync || syncing || !outbox.length || !navigator.onLine){ renderSync(); return }
+  syncing = true; renderSync(); const batch = outbox.slice(0, 200);
+  try{ await api({action:"push", ops:batch});
+    outbox = outbox.filter(o => !batch.some(b => b.tx.id===o.tx.id && b.tx.u===o.tx.u)); saveOutbox(); syncErr = "";
+  }catch(e){ syncErr = errText(e) }
+  syncing = false; renderSync();
+  if(!syncErr && outbox.length) flush();
+}
+async function pull(){
+  const r = await api({action:"pull"});
+  const only = store.reconcile(r.tx||[], r.del||[], new Set(outbox.map(o=>o.tx.id)));
+  for(const t of only) outbox.push({op:"upsert", tx:withName(t)});
+  if(only.length) saveOutbox();
+  return (r.tx||[]).length;
+}
+async function syncNow(){
+  if(!sync || !store || !navigator.onLine){ renderSync(); return }
+  try{ await pull(); syncErr = "" }catch(e){ syncErr = errText(e) }
+  renderBackup(); await flush();
+}
+function renderSync(){
+  const on = !!sync; $("syncForm").hidden = on; $("sOff").hidden = !on; $("sGo").textContent = on ? "Đồng bộ ngay" : "Kết nối";
+  $("syncInfo").textContent = !on ? "Chưa kết nối. Dán địa chỉ Web App và mã khóa từ Google Sheets của bạn."
+    : syncing ? "Đang đồng bộ…" : outbox.length ? "Còn " + outbox.length + " thay đổi chờ gửi lên Sheets." : "Đã kết nối. Mọi khoản đã lên Google Sheets.";
+  let last = 0; try{ last = +localStorage.getItem("sothuchi.backup") || 0 }catch(e){}
+  const days = last ? Math.floor((Date.now()-last)/864e5) : null;
+  const due = !on && store && store.all().length >= 10 && (days===null || days >= 14);
+  if(on && syncErr) setStatus(syncErr, true);
+  else if(on && outbox.length && !navigator.onLine) setStatus("Đang mất mạng. " + outbox.length + " thay đổi sẽ gửi lên Sheets khi có mạng.", false);
+  else setStatus(due ? "Đã lâu chưa sao lưu. Vào Tháng này, kéo xuống cuối để xuất file." : "", due);
+}
+$("sGo").onclick = async () => {
+  if(sync){ await syncNow(); showToast(syncErr || "Đã đồng bộ với Google Sheets.", false); return }
+  const url = $("sUrl").value.trim(), key = $("sKey").value.trim();
+  if(!/^https:\/\/script\.google\.com\/.+\/exec$/.test(url) || !key){ showToast("Địa chỉ phải có dạng https://script.google.com/.../exec và cần có mã khóa.", false); return }
+  sync = {url, key}; $("sGo").disabled = true; $("syncInfo").textContent = "Đang kết nối…";
+  try{ const n = await pull(); syncErr = "";
+    try{ localStorage.setItem(SYNC_KEY, JSON.stringify(sync)) }catch(e){}
+    showToast("Đã kết nối. Tải về " + n + " khoản từ Sheets.", false); renderBackup(); flush();
+  }catch(e){ sync = null; showToast(e && e.message==="key" ? "Sai mã khóa." : "Không kết nối được. Kiểm tra lại địa chỉ Web App.", false) }
+  $("sGo").disabled = false; renderSync();
+};
+$("sOff").onclick = () => {
+  if(!offArmed){ offArmed = true; $("sOff").textContent = "Chạm lần nữa để ngắt"; setTimeout(()=>{ offArmed = false; $("sOff").textContent = "Ngắt kết nối" }, 4000); return }
+  offArmed = false; $("sOff").textContent = "Ngắt kết nối"; sync = null; outbox = []; syncErr = "";
+  try{ localStorage.removeItem(SYNC_KEY); localStorage.removeItem(OUT_KEY) }catch(e){}
+  renderBackup(); showToast("Đã ngắt đồng bộ. Dữ liệu trên máy vẫn giữ nguyên.", false);
 };
 
 renderAmount(); renderCats(); renderMonth();
