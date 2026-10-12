@@ -141,6 +141,12 @@ button{user-select:none;-webkit-user-select:none}
 .cadd input,.cadd select{font:inherit;font-size:15px;color:var(--ink);background:var(--raise);border:1px solid var(--line);border-radius:8px;padding:8px 10px;min-width:0}
 .cadd input{flex:1}
 .cadd button{border:1px solid var(--accent);background:none;color:var(--accent);border-radius:8px;padding:8px 12px;font-weight:600}
+.dates{display:flex;gap:6px;flex:none}
+.dates button,.dpick{position:relative;border:1px solid var(--line);background:var(--surface);border-radius:999px;padding:6px 12px;font-size:13px;font-weight:600;color:var(--muted);overflow:hidden}
+.dates [aria-pressed="true"]{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.dates .past[aria-pressed="true"]{background:var(--warn);border-color:var(--warn);color:var(--bg)}
+.dpick input{position:absolute;inset:0;opacity:0;width:100%;height:100%;border:0;padding:0;cursor:pointer}
+.amount.past{border:2px solid var(--warn)}
 </style>
 </head>
 <body>
@@ -163,8 +169,13 @@ button{user-select:none;-webkit-user-select:none}
           <button id="kChi" aria-pressed="true">Chi</button>
           <button id="kThu" aria-pressed="false">Thu</button>
         </div>
-        <div class="today">Hôm nay đã chi <b class="num" id="todaySum">0</b></div>
+        <div class="today"><span id="dayLabel">Hôm nay</span> đã chi <b class="num" id="todaySum">0</b></div>
       </div>
+    </div>
+    <div class="dates" id="dates">
+      <button type="button" id="dToday" aria-pressed="true">Hôm nay</button>
+      <button type="button" id="dYest" aria-pressed="false">Hôm qua</button>
+      <label class="dpick" id="dOther" aria-pressed="false"><span id="dOtherTxt">Ngày khác</span><input type="date" id="dInput" aria-label="Chọn ngày ghi"></label>
     </div>
     <div class="chips" id="chips" hidden></div>
     <div class="cats" id="cats"></div>
@@ -269,7 +280,7 @@ const ymd = d => d.getFullYear()+"-"+pad2(d.getMonth()+1)+"-"+pad2(d.getDate());
 const TODAY = () => ymd(new Date());
 const NOW_YM = () => TODAY().slice(0,7);
 
-let buf = "", kind = "chi", viewYm = NOW_YM(), txs = [], store = null, lastId = null, editing = null, toastTimer = 0, delArmed = false;
+let selDate = null, pickedAt = 0, buf = "", kind = "chi", viewYm = NOW_YM(), txs = [], store = null, lastId = null, editing = null, toastTimer = 0, delArmed = false;
 
 /* ---------- lưu trữ ---------- */
 function localStore(){
@@ -335,13 +346,13 @@ async function commit(catId, amtOverride){
   if(!store) return;
   const amt = amtOverride || (buf ? parseInt(buf,10)*1000 : 0);
   if(!amt){ nudge(); return }
-  const d = TODAY(); const c = getCat(catId, kind);
+  const d = selDate || TODAY(); const c = getCat(catId, kind); pickedAt = Date.now();
   const t = {ym:d.slice(0,7), d, amt, type:c.t, cat:catId, note:"", ts:Date.now()};
   try{ navigator.vibrate && navigator.vibrate(12) }catch(e){}
   try{
     lastId = await store.add(t); renderBackup();
     buf = ""; if(kind!=="chi") setKind("chi"); renderAmount();
-    showToast("Đã ghi " + fmt(amt) + " đ · " + c.n, true);
+    showToast("Đã ghi " + fmt(amt) + " đ · " + c.n + (selDate ? " · ngày " + dmy(selDate) : ""), true);
   }catch(e){ showToast(e && e.code==="invalid_argument" ? "Tài khoản này không có quyền ghi vào sổ." : "Chưa lưu được. Chạm danh mục lần nữa.", false) }
 }
 function showToast(text, withActions){
@@ -370,6 +381,32 @@ function renderChips(){
   for(const k of top){ const [cat, amt] = k.split("|"); const b = document.createElement("button");
     b.textContent = getCat(cat).n + " " + short(+amt); b.onclick = () => commit(cat, +amt); box.append(b) }
 }
+
+/* ---------- Chọn ngày ghi ---------- */
+const dmy = s => { const [y,m,d] = s.split("-"); return (+d) + "/" + (+m) };
+const WD = ["CN","T2","T3","T4","T5","T6","T7"];
+function yesterday(){ const x = new Date(); x.setDate(x.getDate()-1); return ymd(x) }
+function setDate(s){
+  selDate = (!s || s === TODAY()) ? null : s; pickedAt = Date.now();
+  const y = yesterday(), past = !!selDate, other = past && selDate !== y;
+  $("dToday").setAttribute("aria-pressed", !past);
+  $("dYest").setAttribute("aria-pressed", selDate === y); $("dYest").classList.toggle("past", selDate === y);
+  $("dOther").setAttribute("aria-pressed", other); $("dOther").classList.toggle("past", other);
+  $("dOtherTxt").textContent = other ? WD[new Date(selDate + "T00:00").getDay()] + " " + dmy(selDate) : "Ngày khác";
+  $("dInput").max = TODAY(); $("dInput").value = selDate || "";
+  $("amountBox").classList.toggle("past", past);
+  $("dayLabel").textContent = past ? "Ngày " + dmy(selDate) : "Hôm nay";
+  $("hint").textContent = past ? "Đang ghi cho ngày " + dmy(selDate) + ". Chạm Hôm nay để quay lại." : "Gõ số theo nghìn đồng (45 = 45.000 đ), rồi chạm danh mục để lưu.";
+  renderDaySum();
+}
+function renderDaySum(){
+  const d = selDate || TODAY(); const list = store ? store.all() : txs;
+  $("todaySum").textContent = fmt(list.filter(t=>t.d===d && t.type!=="thu").reduce((s,t)=>s+t.amt,0)) + " đ";
+}
+$("dToday").onclick = () => setDate(null);
+$("dYest").onclick = () => setDate(yesterday());
+$("dInput").onchange = () => { if($("dInput").value) setDate($("dInput").value) };
+document.addEventListener("visibilitychange", () => { if(document.visibilityState === "visible" && selDate && Date.now() - pickedAt > 10*60*1000) setDate(null) });
 
 /* ---------- Tháng ---------- */
 function renderMonth(){
@@ -405,7 +442,7 @@ function renderMonth(){
   }
 }
 function renderAll(){
-  if(viewYm===NOW_YM()){ const d = TODAY(); $("todaySum").textContent = fmt(txs.filter(t=>t.d===d && t.type!=="thu").reduce((s,t)=>s+t.amt,0)) + " đ" }
+  renderDaySum();
   renderChips(); renderMonth();
 }
 function shiftMonth(n){ const [y,m] = viewYm.split("-").map(Number); const d = new Date(y, m-1+n, 1); viewYm = d.getFullYear()+"-"+pad2(d.getMonth()+1); if(store) subscribe() }
@@ -572,7 +609,7 @@ $("sOff").onclick = () => {
   renderBackup(); showToast("Đã ngắt đồng bộ. Dữ liệu trên máy vẫn giữ nguyên.", false);
 };
 
-renderAmount(); renderCats(); renderMonth();
+renderAmount(); renderCats(); renderMonth(); setDate(null);
 if("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
 if(location.hash === "#thang") showTab(true);
 boot();
