@@ -110,7 +110,7 @@ h2{font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--mute
 
 /* ---- Toast + sheet ---- */
 .toast{position:absolute;left:16px;right:16px;bottom:250px;background:var(--ink);color:var(--bg);border-radius:12px;
-  padding:10px 12px;display:flex;align-items:center;gap:8px;font-size:14px;z-index:5;box-shadow:0 6px 20px rgba(0,0,0,.25)}
+  padding:10px 12px;display:flex;align-items:center;gap:8px;font-size:14px;z-index:9;box-shadow:0 6px 20px rgba(0,0,0,.25)}
 .toast span{flex:1;min-width:0}
 .toast button{border:1px solid currentColor;background:none;color:inherit;border-radius:8px;padding:5px 10px;font-size:13px;font-weight:600;flex:none}
 .scrim{position:absolute;inset:0;background:rgba(0,0,0,.45);z-index:8;display:flex;align-items:flex-end}
@@ -130,6 +130,17 @@ button{user-select:none;-webkit-user-select:none}
 .backup{display:flex;flex-direction:column;gap:8px;padding-bottom:8px}
 .backup p{margin:0;font-size:13px;color:var(--muted)}
 .backup .acts button{font-size:14px}
+.edcats{align-self:flex-start;border:1px dashed var(--line);background:none;border-radius:999px;padding:6px 12px;font-size:12px;color:var(--muted);font-weight:600}
+.catsheet{max-height:85%;overflow-y:auto}
+.clist{display:flex;flex-direction:column;gap:6px}
+.crow{display:flex;align-items:center;gap:10px}
+.crow input[type=text]{flex:1;min-width:0;font:inherit;font-size:15px;color:var(--ink);background:var(--raise);border:1px solid var(--line);border-radius:8px;padding:8px 10px}
+.crow input[type=checkbox]{width:22px;height:22px;accent-color:var(--accent);flex:none}
+.crow.off input[type=text]{opacity:.5}
+.cadd{display:flex;gap:8px}
+.cadd input,.cadd select{font:inherit;font-size:15px;color:var(--ink);background:var(--raise);border:1px solid var(--line);border-radius:8px;padding:8px 10px;min-width:0}
+.cadd input{flex:1}
+.cadd button{border:1px solid var(--accent);background:none;color:var(--accent);border-radius:8px;padding:8px 12px;font-weight:600}
 </style>
 </head>
 <body>
@@ -213,6 +224,21 @@ button{user-select:none;-webkit-user-select:none}
       </div>
     </form>
   </div>
+
+  <div class="scrim" id="catScrim" hidden>
+    <div class="sheet catsheet">
+      <h3>Tùy chỉnh danh mục</h3>
+      <p class="hint" style="text-align:left">Bỏ chọn để ẩn, sửa chữ để đổi tên. Khoản cũ vẫn giữ nguyên.</p>
+      <div class="kind" style="align-self:flex-start"><button type="button" id="ckChi" aria-pressed="true">Chi</button><button type="button" id="ckThu" aria-pressed="false">Thu</button></div>
+      <div class="clist" id="clist"></div>
+      <div class="cadd">
+        <input id="cNew" maxlength="20" placeholder="Tên danh mục mới" aria-label="Tên danh mục mới">
+        <select id="cGroup" aria-label="Nhóm"><option value="h">Gia đình</option><option value="w">Công việc</option></select>
+        <button type="button" id="cAdd">Thêm</button>
+      </div>
+      <div class="acts"><button type="button" class="primary" id="cDone">Xong</button></div>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -221,10 +247,20 @@ const CATS = [
   {id:"an",n:"Ăn uống",t:"chi"},{id:"cafe",n:"Cà phê",t:"chi"},{id:"cho",n:"Đi chợ",t:"chi"},{id:"dilai",n:"Đi lại",t:"chi"},
   {id:"nha",n:"Nhà cửa",t:"chi"},{id:"con",n:"Con cái",t:"chi"},{id:"suckhoe",n:"Sức khỏe",t:"chi"},{id:"muasam",n:"Mua sắm",t:"chi"},
   {id:"giaitri",n:"Giải trí",t:"chi"},{id:"hieuhi",n:"Hiếu hỉ",t:"chi"},{id:"khac",n:"Khác",t:"chi"},
-  {id:"phanmem",n:"Phần mềm",t:"chi",w:1},{id:"trade",n:"Phí trade",t:"chi",w:1},{id:"thietbi",n:"Thiết bị",t:"chi",w:1},
+  {id:"phanmem",n:"Phần mềm",t:"chi",w:1,hide:1},{id:"trade",n:"Phí trade",t:"chi",w:1},{id:"thietbi",n:"Thiết bị",t:"chi",w:1,hide:1},
   {id:"congtrinh",n:"Công trình",t:"thu",w:1},{id:"payout",n:"Payout",t:"thu",w:1},{id:"thukhac",n:"Thu khác",t:"thu"}
 ];
 const CAT = Object.fromEntries(CATS.map(c=>[c.id,c]));
+let ccfg = {vis:{}, names:{}, custom:[]};
+try{ ccfg = Object.assign(ccfg, JSON.parse(localStorage.getItem("sothuchi.cats") || "{}")) }catch(e){}
+const saveCfg = () => { try{ localStorage.setItem("sothuchi.cats", JSON.stringify(ccfg)) }catch(e){} };
+function parseCustom(id){ const m = /^u([hw]):(.+)$/.exec(id||""); return m ? {id, n:m[2], w:m[1]==="w"?1:0, custom:1} : null }
+function getCat(id, type){
+  const pc = parseCustom(id);
+  const base = CAT[id] || ccfg.custom.find(c=>c.id===id) || (pc && {...pc, t:type||"chi"}) || CAT.khac;
+  return {...base, n: ccfg.names[base.id] || base.n};
+}
+function allCats(){ return [...CATS, ...ccfg.custom].map(c => ({...c, n: ccfg.names[c.id] || c.n, on: ccfg.vis[c.id] ?? !c.hide})) }
 const $ = id => document.getElementById(id);
 const fmt = n => Math.round(n).toLocaleString("vi-VN");
 const short = n => n>=1e6 ? (n/1e6).toLocaleString("vi-VN",{maximumFractionDigits:1})+"tr" : Math.round(n/1e3)+"k";
@@ -282,13 +318,14 @@ function renderCats(){
   const box = $("cats"); box.textContent = "";
   const groups = [["Gia đình", c=>!c.w], ["Công việc", c=>c.w]];
   for(const [label, pick] of groups){
-    const list = CATS.filter(c=>c.t===kind && pick(c)); if(!list.length) continue;
+    const list = allCats().filter(c=>c.t===kind && c.on && pick(c)); if(!list.length) continue;
     const l = document.createElement("div"); l.className = "glabel"; l.textContent = label; box.append(l);
     const g = document.createElement("div"); g.className = "grid" + (label==="Công việc" ? " work" : "");
     for(const c of list){ const b = document.createElement("button"); b.textContent = c.n; b.disabled = !store;
       b.onclick = () => commit(c.id); g.append(b) }
     box.append(g);
   }
+  const ed = document.createElement("button"); ed.className = "edcats"; ed.type = "button"; ed.textContent = "Tùy chỉnh danh mục"; ed.onclick = openCats; box.append(ed);
 }
 function setKind(k){ kind = k; $("kChi").setAttribute("aria-pressed", k==="chi"); $("kThu").setAttribute("aria-pressed", k==="thu"); renderCats(); renderAmount() }
 function nudge(){ const a = $("amountBox"); a.classList.remove("nudge"); void a.offsetWidth; a.classList.add("nudge");
@@ -298,7 +335,7 @@ async function commit(catId, amtOverride){
   if(!store) return;
   const amt = amtOverride || (buf ? parseInt(buf,10)*1000 : 0);
   if(!amt){ nudge(); return }
-  const d = TODAY(); const c = CAT[catId];
+  const d = TODAY(); const c = getCat(catId, kind);
   const t = {ym:d.slice(0,7), d, amt, type:c.t, cat:catId, note:"", ts:Date.now()};
   try{ navigator.vibrate && navigator.vibrate(12) }catch(e){}
   try{
@@ -326,12 +363,12 @@ $("kThu").onclick = () => setKind("thu");
 function renderChips(){
   const count = {};
   for(const t of txs){ const k = t.cat+"|"+t.amt; count[k] = (count[k]||0)+1 }
-  let top = Object.entries(count).filter(([k,n])=>n>=2 && CAT[k.split("|")[0]]).sort((a,b)=>b[1]-a[1]).slice(0,5).map(([k])=>k);
+  let top = Object.entries(count).filter(([k,n])=>n>=2).sort((a,b)=>b[1]-a[1]).slice(0,5).map(([k])=>k);
   try{ if(viewYm===NOW_YM() && top.length) localStorage.setItem("sothuchi.chips", JSON.stringify(top));
-       else if(!top.length) top = JSON.parse(localStorage.getItem("sothuchi.chips")||"[]").filter(k=>CAT[String(k).split("|")[0]]) }catch(e){}
+       else if(!top.length) top = JSON.parse(localStorage.getItem("sothuchi.chips")||"[]").filter(k=>String(k).includes("|")) }catch(e){}
   const box = $("chips"); box.textContent = ""; box.hidden = !top.length;
   for(const k of top){ const [cat, amt] = k.split("|"); const b = document.createElement("button");
-    b.textContent = CAT[cat].n + " " + short(+amt); b.onclick = () => commit(cat, +amt); box.append(b) }
+    b.textContent = getCat(cat).n + " " + short(+amt); b.onclick = () => commit(cat, +amt); box.append(b) }
 }
 
 /* ---------- Tháng ---------- */
@@ -339,7 +376,7 @@ function renderMonth(){
   const [y,m] = viewYm.split("-"); $("mTitle").textContent = "Tháng " + (+m) + "/" + y;
   $("mNext").disabled = viewYm >= NOW_YM();
   let home=0, work=0, inc=0; const by = {};
-  for(const t of txs){ const c = CAT[t.cat] || CAT.khac;
+  for(const t of txs){ const c = getCat(t.cat, t.type);
     if(t.type==="thu") inc += t.amt; else { (c.w ? work += t.amt : home += t.amt); by[c.id] = (by[c.id]||0) + t.amt } }
   $("sHome").textContent = short(home); $("sWork").textContent = short(work); $("sIn").textContent = short(inc);
   const net = inc - home - work;
@@ -348,7 +385,7 @@ function renderMonth(){
 
   const bars = $("bars"); bars.textContent = ""; const rows = Object.entries(by).sort((a,b)=>b[1]-a[1]); const max = rows.length ? rows[0][1] : 1;
   if(!rows.length) bars.innerHTML = '<div class="empty">Chưa có khoản chi nào trong tháng này.</div>';
-  for(const [id, v] of rows){ const c = CAT[id]; const r = document.createElement("div"); r.className = "bar" + (c.w ? " work" : "");
+  for(const [id, v] of rows){ const c = getCat(id, "chi"); const r = document.createElement("div"); r.className = "bar" + (c.w ? " work" : "");
     r.innerHTML = '<div></div><div class="track"><div class="fill"></div></div><div class="v num"></div>';
     r.children[0].textContent = c.n; r.querySelector(".fill").style.width = Math.max(3, v/max*100) + "%"; r.children[2].textContent = fmt(v); bars.append(r) }
 
@@ -360,7 +397,7 @@ function renderMonth(){
     if(t.d !== cur){ cur = t.d; const h = document.createElement("div"); h.className = "day"; const [yy,mm,dd] = t.d.split("-");
       const a = document.createElement("span"); a.textContent = t.d===TODAY() ? "Hôm nay" : "Ngày " + (+dd) + "/" + (+mm);
       const b = document.createElement("span"); b.textContent = "chi " + fmt(daySum[t.d]||0); h.append(a,b); list.append(h) }
-    const c = CAT[t.cat] || CAT.khac; const r = document.createElement("button"); r.className = "row";
+    const c = getCat(t.cat, t.type); const r = document.createElement("button"); r.className = "row";
     r.innerHTML = '<span class="c"></span><span class="n"></span><span class="a num"></span>';
     r.children[0].textContent = c.n; r.children[1].textContent = t.note || "";
     r.children[2].textContent = (t.type==="thu" ? "+" : "") + fmt(t.amt); if(t.type==="thu") r.children[2].classList.add("thu");
@@ -388,8 +425,9 @@ function openEdit(t, focusNote){
   editing = t; delArmed = false; $("eDel").textContent = "Xóa";
   $("eAmt").value = Math.round(t.amt/1000); $("eDate").value = t.d; $("eNote").value = t.note || "";
   const sel = $("eCat"); sel.textContent = "";
-  for(const c of CATS){ const o = document.createElement("option"); o.value = c.id; o.textContent = (c.t==="thu" ? "Thu · " : "Chi · ") + c.n; sel.append(o) }
-  sel.value = CAT[t.cat] ? t.cat : "khac";
+  for(const c of allCats().filter(c=>c.on || c.id===t.cat)){ const o = document.createElement("option"); o.value = c.id; o.textContent = (c.t==="thu" ? "Thu · " : "Chi · ") + c.n; sel.append(o) }
+  if(![...sel.options].some(o=>o.value===t.cat)){ const o = document.createElement("option"); o.value = t.cat; o.textContent = getCat(t.cat, t.type).n; sel.append(o) }
+  sel.value = t.cat;
   $("scrim").hidden = false; if(focusNote) $("eNote").focus();
 }
 function closeEdit(){ $("scrim").hidden = true; editing = null }
@@ -404,9 +442,40 @@ $("sheet").onsubmit = async e => {
   e.preventDefault(); if(!editing) return;
   const k = parseInt($("eAmt").value, 10), d = $("eDate").value, cat = $("eCat").value;
   if(!(k>0) || !/^\d{4}-\d{2}-\d{2}$/.test(d)){ showToast("Số tiền và ngày chưa hợp lệ.", false); return }
-  const t = {ym:d.slice(0,7), d, amt:k*1000, type:CAT[cat].t, cat, note:$("eNote").value.trim().slice(0,80), ts:editing.ts || Date.now()};
+  const t = {ym:d.slice(0,7), d, amt:k*1000, type:getCat(cat, editing.type).t, cat, note:$("eNote").value.trim().slice(0,80), ts:editing.ts || Date.now()};
   const id = editing.id; closeEdit();
   try{ await store.save(id, t) }catch(err){ showToast("Chưa lưu được thay đổi. Thử lại.", false) }
+};
+
+/* ---------- Tùy chỉnh danh mục ---------- */
+let ckind = "chi";
+function renderCatEditor(){
+  const box = $("clist"); box.textContent = "";
+  for(const [label, w] of [["Gia đình", 0], ["Công việc", 1]]){
+    const list = allCats().filter(c => c.t===ckind && !!c.w===!!w); if(!list.length) continue;
+    const l = document.createElement("div"); l.className = "glabel"; l.textContent = label; box.append(l);
+    for(const c of list){
+      const r = document.createElement("label"); r.className = "crow" + (c.on ? "" : " off");
+      const cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = c.on; cb.setAttribute("aria-label", "Hiện " + c.n);
+      cb.onchange = () => { ccfg.vis[c.id] = cb.checked; saveCfg(); r.classList.toggle("off", !cb.checked) };
+      const tx = document.createElement("input"); tx.type = "text"; tx.value = c.n; tx.maxLength = 20;
+      tx.onchange = () => { const v = tx.value.trim(); if(v) ccfg.names[c.id] = v; else { delete ccfg.names[c.id]; tx.value = getCat(c.id).n } saveCfg() };
+      r.append(cb, tx); box.append(r);
+    }
+  }
+}
+function setCkind(k){ ckind = k; $("ckChi").setAttribute("aria-pressed", k==="chi"); $("ckThu").setAttribute("aria-pressed", k==="thu"); renderCatEditor() }
+function openCats(){ setCkind(kind); $("cNew").value = ""; $("catScrim").hidden = false }
+function closeCats(){ $("catScrim").hidden = true; renderCats(); renderAll() }
+$("ckChi").onclick = () => setCkind("chi");
+$("ckThu").onclick = () => setCkind("thu");
+$("cDone").onclick = closeCats;
+$("catScrim").onclick = e => { if(e.target === $("catScrim")) closeCats() };
+$("cAdd").onclick = () => {
+  const n = $("cNew").value.trim().replace(/\s+/g, " "); if(!n){ $("cNew").focus(); return }
+  const w = $("cGroup").value; const id = "u" + w + ":" + n;
+  if(allCats().some(c => c.id===id || (c.t===ckind && c.n.toLowerCase()===n.toLowerCase()))){ showToast("Đã có danh mục tên này.", false); return }
+  ccfg.custom.push({id, n, t:ckind, w: w==="w" ? 1 : 0}); ccfg.vis[id] = true; saveCfg(); $("cNew").value = ""; renderCatEditor();
 };
 
 /* ---------- Sao lưu ---------- */
@@ -446,7 +515,7 @@ const SYNC_KEY = "sothuchi.sync", OUT_KEY = "sothuchi.outbox";
 let sync = null, outbox = [], syncing = false, syncErr = "", offArmed = false;
 try{ sync = JSON.parse(localStorage.getItem(SYNC_KEY) || "null"); outbox = JSON.parse(localStorage.getItem(OUT_KEY) || "[]") }catch(e){}
 const saveOutbox = () => { try{ localStorage.setItem(OUT_KEY, JSON.stringify(outbox)) }catch(e){} };
-const withName = t => ({...t, catName:(CAT[t.cat]||CAT.khac).n});
+const withName = t => ({...t, catName:getCat(t.cat, t.type).n});
 function onWrite(op, t){ if(!sync) return; outbox = outbox.filter(o => o.tx.id !== t.id); outbox.push({op, tx:withName(t)}); saveOutbox(); flush() }
 async function api(body){
   const r = await fetch(sync.url, {method:"POST", headers:{"Content-Type":"text/plain;charset=utf-8"}, body:JSON.stringify({...body, key:sync.key})});
